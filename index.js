@@ -74,6 +74,63 @@ const createWhatsAppClient = async (sessionId, isReconnect = false) => {
 
     return client;
 };
+// Criar uma nova instância no banco
+app.post('/api/whatsapp/instancia', async (req, res) => {
+    const { nome } = req.body;
+    if (!nome) return res.status(400).json({ error: 'Nome da instância é obrigatório' });
+    try {
+        await pool.query(
+            `INSERT INTO whatsapp_instancias (session_id, status) 
+             VALUES ($1, 'desconectado') 
+             ON CONFLICT (session_id) DO NOTHING`,
+            [nome]
+        );
+        res.json({ message: 'Instância criada. Agora conecte o WhatsApp.', sessionId: nome });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Erro ao criar instância' });
+    }
+});
+
+// Conectar um WhatsApp à instância e obter QR Code
+app.post('/api/whatsapp/conectar', async (req, res) => {
+    const { sessionId } = req.body;
+    if (!sessionId) return res.status(400).json({ error: 'sessionId é obrigatório' });
+    
+    await createWhatsAppClient(sessionId, false);
+    setTimeout(() => {
+        if (qrCodes[sessionId]) {
+            res.json({ sessionId, qr: qrCodes[sessionId] });
+        } else {
+            res.status(500).json({ error: 'QR Code não gerado a tempo' });
+        }
+    }, 2000);
+});
+
+// Obter QR Code temporário
+app.get('/api/whatsapp/qrcode/:sessionId', (req, res) => {
+    const { sessionId } = req.params;
+    if (!qrCodes[sessionId]) {
+        return res.status(404).json({ error: 'QR Code não encontrado ou instância já conectada.' });
+    }
+    res.json({ sessionId, qr: qrCodes[sessionId] });
+});
+
+// Obter o status da instância
+app.get('/api/whatsapp/status/:sessionId', async (req, res) => {
+    const { sessionId } = req.params;
+    const result = await pool.query('SELECT * FROM whatsapp_instancias WHERE session_id = $1', [sessionId]);
+    res.json(result.rows[0] || { error: 'Instância não encontrada' });
+});
+
+// Reconectar instâncias ao iniciar o servidor
+(async () => {
+    const result = await pool.query("SELECT session_id FROM whatsapp_instancias WHERE status = 'conectado'");
+    for (let row of result.rows) {
+        console.log(colors.cyan(`Reconectando instância: ${row.session_id}`));
+        await createWhatsAppClient(row.session_id, true);
+    }
+})();
 
 // Obter todos os grupos da instância
 app.get('/api/whatsapp/grupos/:sessionId', async (req, res) => {
